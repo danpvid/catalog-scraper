@@ -1,0 +1,16 @@
+# Dados coletados
+dados/
+imagens/
+logs/
+
+# Arquivos de estado e log gerados pelo scraper
+_estado_scraper.json
+_log_extracao.txt
+_diagnostico.html
+_diag_list.html
+
+# Dependências
+node_modules/
+
+# Catálogo gerado
+catalogo.html

@@ -1,0 +1,22 @@
+{
+  "name": "catalogo-cartoes-brasil",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "scrape": "node scraper.js",
+    "scrape:continuous": "node run-continuous.js",
+    "catalog": "node build-catalog.js",
+    "check": "node --check scraper.js && node --check build-catalog.js && node --check run-continuous.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "https-proxy-agent": "^9.1.0",
+    "playwright": "^1.60.0",
+    "socks-proxy-agent": "^10.1.0"
+  }
+}
