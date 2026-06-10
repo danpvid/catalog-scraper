@@ -41,10 +41,7 @@ const PAGE_PAUSE_EVERY = parsePositiveInt(args.pagePauseEvery, 8);
 const PAGE_PAUSE_MIN_MS = parsePositiveInt(args.pagePauseMin, 45000);
 const PAGE_PAUSE_MAX_MS = Math.max(parsePositiveInt(args.pagePauseMax, 120000), PAGE_PAUSE_MIN_MS);
 const STATE_FILE = path.join(OUTPUT_DIR, '_estado_scraper.json');
-const PLACEHOLDER_HASHES_FILE = path.join(OUTPUT_DIR, '_placeholder_hashes.json');
 const BLOCKED_IMAGES_FILE = path.join(OUTPUT_DIR, '_imagens_bloqueadas.json');
-// Mínimo de cartões distintos com o mesmo hash para considerar placeholder automático
-const PLACEHOLDER_AUTO_THRESHOLD = 3;
 
 const IMAGE_VARIANTS = [
   { key: 'thumb', pathPart: 't', suffix: '_thumb' },
@@ -58,64 +55,24 @@ let lastRequestAt = 0;
 let lastPageLoaded = '';
 
 // ─── Detecção de imagem placeholder ("Iniciar Sessão") ───────────────────────
-// Mapa: hash -> Set de id_colnect que baixaram aquela imagem nesta sessão
-const hashCardMap = new Map();
-// Hashes confirmados como placeholder (carregados do arquivo + detectados na sessão)
+// Hashes confirmados como placeholder (embutidos + carregados do arquivo)
 // Hash embutido: retângulo preto vertical (4928b) — confirmado em 12.932 cartões
+// Não usamos detecção automática por repetição: séries de cartões são intencionalmente
+// idênticas e causariam falsos positivos.
 let knownPlaceholderHashes = new Set([
   'd812f4defbdb2f9ff7084505226c0878607145436f59a3df1524d9ab88ebb867',
 ]);
-
-function loadPlaceholderHashes() {
-  try {
-    if (!fs.existsSync(PLACEHOLDER_HASHES_FILE)) return;
-    const data = JSON.parse(fs.readFileSync(PLACEHOLDER_HASHES_FILE, 'utf8'));
-    if (Array.isArray(data.hashes)) {
-      for (const h of data.hashes) knownPlaceholderHashes.add(h);
-    }
-    log(`Placeholder hashes carregados: ${knownPlaceholderHashes.size}`);
-  } catch {
-    // Ignora erros de leitura
-  }
-}
-
-function savePlaceholderHashes() {
-  try {
-    const data = {
-      atualizado_em: new Date().toISOString(),
-      total: knownPlaceholderHashes.size,
-      hashes: [...knownPlaceholderHashes],
-    };
-    writeJsonFile(PLACEHOLDER_HASHES_FILE, data);
-  } catch {
-    // Ignora erros de escrita
-  }
-}
 
 function computeHash(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
 /**
- * Registra o hash de uma imagem baixada para o cartão `cardId`.
- * Se o hash já for conhecido como placeholder, retorna true imediatamente.
- * Caso contrário, verifica se atingiu o limiar automático.
+ * Verifica se o hash de uma imagem é um placeholder conhecido.
  * @returns {boolean} true se a imagem é um placeholder
  */
-function trackImageHash(hash, cardId) {
-  if (knownPlaceholderHashes.has(hash)) return true;
-
-  if (!hashCardMap.has(hash)) hashCardMap.set(hash, new Set());
-  hashCardMap.get(hash).add(String(cardId));
-
-  if (hashCardMap.get(hash).size >= PLACEHOLDER_AUTO_THRESHOLD) {
-    log(`  Placeholder detectado automaticamente (hash ${hash.slice(0, 12)}..., ${hashCardMap.get(hash).size} cartoes).`);
-    knownPlaceholderHashes.add(hash);
-    savePlaceholderHashes();
-    return true;
-  }
-
-  return false;
+function trackImageHash(hash) {
+  return knownPlaceholderHashes.has(hash);
 }
 
 // ─── Registro global de imagens bloqueadas ───────────────────────────────────
@@ -875,7 +832,7 @@ async function downloadImages(card, imageDir, baseFileName, existingData) {
       const fileName = `${baseFileName}${sideSuffix}${variant.suffix}.${extension}`;
       const destination = path.join(imageDir, fileName);
       const variantUrl = imageVariantUrl(imageUrl, variant.pathPart);
-      const downloaded = await downloadImageVariant(variantUrl, destination, card.id_colnect);
+      const downloaded = await downloadImageVariant(variantUrl, destination);
 
       if (downloaded?.placeholder) {
         hasPlaceholder = true;
@@ -915,14 +872,13 @@ function imageVariantUrl(imageUrl, pathPart) {
   return parsed.toString();
 }
 
-async function downloadImageVariant(url, destination, cardId) {
+async function downloadImageVariant(url, destination) {
   const temp = `${destination}.tmp`;
 
   if (fs.existsSync(destination) && fs.statSync(destination).size > 100) {
     // Verifica se a imagem já salva é um placeholder
     const existing = fs.readFileSync(destination);
-    const hash = computeHash(existing);
-    if (cardId && trackImageHash(hash, cardId)) {
+    if (trackImageHash(computeHash(existing))) {
       // Apaga a imagem placeholder que foi salva anteriormente
       try { fs.unlinkSync(destination); } catch {}
       return { placeholder: true };
@@ -935,8 +891,7 @@ async function downloadImageVariant(url, destination, cardId) {
     const contentType = String(response.headers['content-type'] || '');
     if (response.status !== 200 || !contentType.startsWith('image/') || response.body.length < 100) return null;
 
-    const hash = computeHash(response.body);
-    if (cardId && trackImageHash(hash, cardId)) {
+    if (trackImageHash(computeHash(response.body))) {
       log(`    imagem bloqueada (placeholder detectado): ${path.basename(destination)}`);
       return { placeholder: true };
     }
@@ -1074,7 +1029,6 @@ async function main() {
   ensureDir(DATA_DIR);
   ensureDir(IMAGES_DIR);
 
-  loadPlaceholderHashes();
   log(`Saida: ${OUTPUT_DIR}`);
   log(`Imagens: ${DOWNLOAD_IMAGES ? 'sim' : 'nao'}`);
   log(`Imagens high: ${DOWNLOAD_HIGH_IMAGES ? 'sim' : 'nao'}`);
