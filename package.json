@@ -7,7 +7,9 @@
     "scrape": "node scraper.js",
     "scrape:continuous": "node run-continuous.js",
     "catalog": "node build-catalog.js",
-    "check": "node --check scraper.js && node --check build-catalog.js && node --check run-continuous.js"
+    "fix:blocked": "node fix-blocked-images.js",
+    "fix:blocked:apply": "node fix-blocked-images.js --fix",
+    "check": "node --check scraper.js && node --check build-catalog.js && node --check run-continuous.js && node --check fix-blocked-images.js"
   },
   "keywords": [],
   "author": "",

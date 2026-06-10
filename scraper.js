@@ -1,6 +1,7 @@
 'use strict';
 
 const cheerio = require('cheerio');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
@@ -27,6 +28,8 @@ const COMPANIES_HTML = args.fromHtml || null;
 const LIST_HTML = args.listHtml || null;
 // headless=false por padrão para o browser ficar visível e resolver Anubis
 const HEADLESS = args.headless === 'true';
+// Aguarda o usuário fazer login manual antes de iniciar o scraping
+const AWAIT_LOGIN = !!args.aguardarLogin;
 // Sessão global do Playwright (fica aberta durante toda a extração)
 let BROWSER = null;
 let CTX = null;
@@ -38,6 +41,11 @@ const PAGE_PAUSE_EVERY = parsePositiveInt(args.pagePauseEvery, 8);
 const PAGE_PAUSE_MIN_MS = parsePositiveInt(args.pagePauseMin, 45000);
 const PAGE_PAUSE_MAX_MS = Math.max(parsePositiveInt(args.pagePauseMax, 120000), PAGE_PAUSE_MIN_MS);
 const STATE_FILE = path.join(OUTPUT_DIR, '_estado_scraper.json');
+const PLACEHOLDER_HASHES_FILE = path.join(OUTPUT_DIR, '_placeholder_hashes.json');
+const BLOCKED_IMAGES_FILE = path.join(OUTPUT_DIR, '_imagens_bloqueadas.json');
+// Mínimo de cartões distintos com o mesmo hash para considerar placeholder automático
+const PLACEHOLDER_AUTO_THRESHOLD = 3;
+
 const IMAGE_VARIANTS = [
   { key: 'thumb', pathPart: 't', suffix: '_thumb' },
   { key: 'full', pathPart: 'f', suffix: '' },
@@ -48,6 +56,98 @@ const IMAGE_VARIANTS = [
 let lastRequestAt = 0;
 // Página mais recente carregada (para log)
 let lastPageLoaded = '';
+
+// ─── Detecção de imagem placeholder ("Iniciar Sessão") ───────────────────────
+// Mapa: hash -> Set de id_colnect que baixaram aquela imagem nesta sessão
+const hashCardMap = new Map();
+// Hashes confirmados como placeholder (carregados do arquivo + detectados na sessão)
+// Hash embutido: retângulo preto vertical (4928b) — confirmado em 12.932 cartões
+let knownPlaceholderHashes = new Set([
+  'd812f4defbdb2f9ff7084505226c0878607145436f59a3df1524d9ab88ebb867',
+]);
+
+function loadPlaceholderHashes() {
+  try {
+    if (!fs.existsSync(PLACEHOLDER_HASHES_FILE)) return;
+    const data = JSON.parse(fs.readFileSync(PLACEHOLDER_HASHES_FILE, 'utf8'));
+    if (Array.isArray(data.hashes)) {
+      for (const h of data.hashes) knownPlaceholderHashes.add(h);
+    }
+    log(`Placeholder hashes carregados: ${knownPlaceholderHashes.size}`);
+  } catch {
+    // Ignora erros de leitura
+  }
+}
+
+function savePlaceholderHashes() {
+  try {
+    const data = {
+      atualizado_em: new Date().toISOString(),
+      total: knownPlaceholderHashes.size,
+      hashes: [...knownPlaceholderHashes],
+    };
+    writeJsonFile(PLACEHOLDER_HASHES_FILE, data);
+  } catch {
+    // Ignora erros de escrita
+  }
+}
+
+function computeHash(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+/**
+ * Registra o hash de uma imagem baixada para o cartão `cardId`.
+ * Se o hash já for conhecido como placeholder, retorna true imediatamente.
+ * Caso contrário, verifica se atingiu o limiar automático.
+ * @returns {boolean} true se a imagem é um placeholder
+ */
+function trackImageHash(hash, cardId) {
+  if (knownPlaceholderHashes.has(hash)) return true;
+
+  if (!hashCardMap.has(hash)) hashCardMap.set(hash, new Set());
+  hashCardMap.get(hash).add(String(cardId));
+
+  if (hashCardMap.get(hash).size >= PLACEHOLDER_AUTO_THRESHOLD) {
+    log(`  Placeholder detectado automaticamente (hash ${hash.slice(0, 12)}..., ${hashCardMap.get(hash).size} cartoes).`);
+    knownPlaceholderHashes.add(hash);
+    savePlaceholderHashes();
+    return true;
+  }
+
+  return false;
+}
+
+// ─── Registro global de imagens bloqueadas ───────────────────────────────────
+function loadBlockedImages() {
+  return readJsonFile(BLOCKED_IMAGES_FILE, { atualizado_em: null, total: 0, cartoes: [] });
+}
+
+function saveBlockedImages(registry) {
+  registry.atualizado_em = new Date().toISOString();
+  registry.total = registry.cartoes.length;
+  writeJsonFile(BLOCKED_IMAGES_FILE, registry);
+}
+
+function registerBlockedCard(card, company, pageUrl) {
+  const registry = loadBlockedImages();
+  const existing = registry.cartoes.findIndex(c => String(c.id_colnect) === String(card.id_colnect));
+  const entry = {
+    id_colnect: card.id_colnect,
+    nome: card.nome,
+    url_colnect: card.url_colnect,
+    operadora: company.name,
+    operadora_dir: sanitize(company.name),
+    pagina_lista: pageUrl || '',
+    registrado_em: new Date().toISOString(),
+  };
+  if (existing >= 0) {
+    registry.cartoes[existing] = entry;
+  } else {
+    registry.cartoes.push(entry);
+  }
+  saveBlockedImages(registry);
+}
 
 function parseArgs(argv) {
   const parsed = {};
@@ -412,6 +512,27 @@ async function initSession() {
   // Salva HTML das operadoras (já estamos na página certa)
   COMPANIES_HTML_CONTENT = await PAGE.content();
   log('  Sessao iniciada. Browser permanece aberto.');
+
+  // Se solicitado, aguarda login manual do usuário antes de prosseguir
+  if (AWAIT_LOGIN) {
+    log('');
+    log('========================================================');
+    log('  AGUARDANDO LOGIN MANUAL');
+    log('  Faca login no Colnect no browser aberto.');
+    log('  Depois volte aqui e pressione ENTER para continuar.');
+    log('========================================================');
+    await new Promise(resolve => {
+      process.stdin.setRawMode(false);
+      process.stdin.resume();
+      process.stdin.once('data', () => { process.stdin.pause(); resolve(); });
+    });
+    log('  Login confirmado. Retomando scraping...');
+    // Recarrega a página principal após login para capturar HTML autenticado
+    await PAGE.goto(COMPANIES_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await humanScroll(PAGE);
+    await humanPause();
+    COMPANIES_HTML_CONTENT = await PAGE.content();
+  }
 }
 
 async function getCompanies() {
@@ -734,12 +855,15 @@ async function downloadImages(card, imageDir, baseFileName, existingData) {
       normal: existingData?.imagens_local || [],
       high: existingData?.imagens_high_local || [],
       variants: existingData?.imagens_variantes_local || [],
+      hasPlaceholder: false,
     };
   }
 
   const localImages = [];
   const highImages = [];
   const variants = [];
+  let hasPlaceholder = false;
+
   for (let index = 0; index < card.imagens.length; index += 1) {
     const imageUrl = card.imagens[index];
     const extension = extensionFromUrl(imageUrl);
@@ -751,7 +875,12 @@ async function downloadImages(card, imageDir, baseFileName, existingData) {
       const fileName = `${baseFileName}${sideSuffix}${variant.suffix}.${extension}`;
       const destination = path.join(imageDir, fileName);
       const variantUrl = imageVariantUrl(imageUrl, variant.pathPart);
-      const downloaded = await downloadImageVariant(variantUrl, destination);
+      const downloaded = await downloadImageVariant(variantUrl, destination, card.id_colnect);
+
+      if (downloaded?.placeholder) {
+        hasPlaceholder = true;
+        continue;
+      }
 
       if (downloaded) {
         variants.push({
@@ -772,6 +901,7 @@ async function downloadImages(card, imageDir, baseFileName, existingData) {
     normal: localImages.length ? localImages : (existingData?.imagens_local || []),
     high: highImages.length ? highImages : (existingData?.imagens_high_local || []),
     variants: variants.length ? variants : (existingData?.imagens_variantes_local || []),
+    hasPlaceholder,
   };
 }
 
@@ -785,17 +915,32 @@ function imageVariantUrl(imageUrl, pathPart) {
   return parsed.toString();
 }
 
-async function downloadImageVariant(url, destination) {
+async function downloadImageVariant(url, destination, cardId) {
   const temp = `${destination}.tmp`;
 
   if (fs.existsSync(destination) && fs.statSync(destination).size > 100) {
-    return { bytes: fs.statSync(destination).size, existed: true };
+    // Verifica se a imagem já salva é um placeholder
+    const existing = fs.readFileSync(destination);
+    const hash = computeHash(existing);
+    if (cardId && trackImageHash(hash, cardId)) {
+      // Apaga a imagem placeholder que foi salva anteriormente
+      try { fs.unlinkSync(destination); } catch {}
+      return { placeholder: true };
+    }
+    return { bytes: existing.length, existed: true };
   }
 
   try {
     const response = await fetchImage(url);
     const contentType = String(response.headers['content-type'] || '');
     if (response.status !== 200 || !contentType.startsWith('image/') || response.body.length < 100) return null;
+
+    const hash = computeHash(response.body);
+    if (cardId && trackImageHash(hash, cardId)) {
+      log(`    imagem bloqueada (placeholder detectado): ${path.basename(destination)}`);
+      return { placeholder: true };
+    }
+
     fs.writeFileSync(temp, response.body);
     fs.renameSync(temp, destination);
     return { bytes: response.body.length, existed: false };
@@ -803,7 +948,7 @@ async function downloadImageVariant(url, destination) {
     log(`    falha imagem (${url}): ${error.message}`);
     return null;
   } finally {
-    if (fs.existsSync(temp)) fs.unlinkSync(temp);
+    if (fs.existsSync(temp)) try { fs.unlinkSync(temp); } catch {}
   }
 }
 
@@ -829,6 +974,8 @@ function writeIndex(dataDir, companyName) {
 
 function isCardComplete(data, sourceCard = null) {
   if (!data) return false;
+  // Cartões com imagem bloqueada nunca são considerados completos — serão retentados
+  if (data.imagem_bloqueada) return false;
   if (!DOWNLOAD_IMAGES) return true;
   const expectedImages = Math.max(
     Array.isArray(sourceCard?.imagens) ? sourceCard.imagens.length : 0,
@@ -885,11 +1032,18 @@ async function processCompany(company, state) {
         imagens_high_local: downloaded.high,
         imagem_high_principal: downloaded.high[0] || '',
         imagens_variantes_local: downloaded.variants,
+        imagem_bloqueada: downloaded.hasPlaceholder || false,
         operadora_nome: company.name,
         operadora_dir: companyDir,
         extraido_em: new Date().toISOString(),
       };
       writeCard(dataDir, finalCard, existingEntry);
+
+      if (downloaded.hasPlaceholder) {
+        registerBlockedCard(card, company, company.href);
+        log(`  Cartao ${card.id_colnect} marcado como imagem bloqueada.`);
+      }
+
       saved += 1;
       state.companies[company.name].last_card_id = card.id_colnect;
       state.companies[company.name].salvos = (state.companies[company.name].salvos || 0) + 1;
@@ -920,7 +1074,7 @@ async function main() {
   ensureDir(DATA_DIR);
   ensureDir(IMAGES_DIR);
 
-  log('Scraper Colnect - cartoes telefonicos do Brasil');
+  loadPlaceholderHashes();
   log(`Saida: ${OUTPUT_DIR}`);
   log(`Imagens: ${DOWNLOAD_IMAGES ? 'sim' : 'nao'}`);
   log(`Imagens high: ${DOWNLOAD_HIGH_IMAGES ? 'sim' : 'nao'}`);

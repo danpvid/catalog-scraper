@@ -63,3 +63,22 @@ Use `--refresh-links` quando quiser redescobrir as listas de uma operadora.
 - `--sem-high`: baixa somente imagem normal, sem a versao `_high`.
 - `--refresh`: reprocessa dados e imagens existentes.
 - `--refresh-links`: baixa novamente as paginas de listagem.
+- `--aguardar-login`: pausa apos abrir o browser para voce fazer login manual no Colnect antes de comecar o scraping. Necessario para baixar imagens protegidas.
+
+## 6. Corrigir imagens bloqueadas ja baixadas
+
+Após rodar o scraper, algumas imagens podem ter sido salvas como placeholder (retangulo preto). Para detectar e corrigir:
+
+```powershell
+# Ver quais seriam afetadas (sem apagar nada)
+node fix-blocked-images.js
+
+# Apagar os placeholders e atualizar os cartoes
+node fix-blocked-images.js --fix
+```
+
+Os cartoes afetados ficam registrados em `_imagens_bloqueadas.json`. Para baixar as imagens corretas, rode o scraper com login:
+
+```powershell
+node scraper.js --aguardar-login --refresh
+```

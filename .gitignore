@@ -8,6 +8,8 @@ _estado_scraper.json
 _log_extracao.txt
 _diagnostico.html
 _diag_list.html
+_placeholder_hashes.json
+_imagens_bloqueadas.json
 
 # Dependências
 node_modules/
