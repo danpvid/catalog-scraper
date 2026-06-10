@@ -82,3 +82,37 @@ Os cartoes afetados ficam registrados em `_imagens_bloqueadas.json`. Para baixar
 ```powershell
 node scraper.js --aguardar-login --refresh
 ```
+
+## 7. Como funciona a deteccao de imagens bloqueadas
+
+O Colnect exige login para liberar algumas imagens. Sem autenticacao, o site devolve
+um placeholder: um retangulo preto uniforme (~4.928 bytes).
+
+O scraper detecta isso de duas formas:
+
+1. **Hash conhecido embutido**: o SHA256 do placeholder preto vertical ja esta no codigo.
+   Qualquer imagem com esse hash e descartada automaticamente na hora do download.
+
+2. **Deteccao automatica por repeticao**: se um mesmo hash aparecer em 3 ou mais cartoes
+   distintos durante a sessao, ele e marcado como placeholder e salvo em
+   `_placeholder_hashes.json` para as proximas execucoes.
+
+Cartoes com imagem bloqueada recebem `imagem_bloqueada: true` no seu `.js` e nunca sao
+considerados completos — o scraper sempre tentara re-baixar a imagem deles.
+
+## 8. Fluxo completo para corrigir imagens bloqueadas
+
+```powershell
+# Passo 1: ver quantas imagens placeholder existem (sem apagar nada)
+node fix-blocked-images.js
+
+# Passo 2: apagar os placeholders e marcar os cartoes
+node fix-blocked-images.js --fix
+
+# Passo 3: re-baixar com sessao autenticada
+#   O browser abre visivelmente. Faca login no Colnect e pressione ENTER.
+node scraper.js --aguardar-login --refresh
+
+# Passo 4: reconstruir o catalogo HTML
+node build-catalog.js
+```
