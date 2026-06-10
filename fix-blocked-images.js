@@ -19,7 +19,7 @@ const crypto = require('crypto');
 
 // ─── Hashes conhecidos de imagens placeholder ─────────────────────────────────
 // Adicione aqui novos hashes caso o site passe a servir outros placeholders.
-const KNOWN_PLACEHOLDER_HASHES = new Set([
+const PLACEHOLDER_HASHES = new Set([
   'd812f4defbdb2f9ff7084505226c0878607145436f59a3df1524d9ab88ebb867', // retângulo preto vertical (4928b)
 ]);
 
@@ -27,7 +27,6 @@ const ROOT         = __dirname;
 const DATA_DIR     = path.join(ROOT, 'dados');
 const IMAGES_DIR   = path.join(ROOT, 'imagens');
 const BLOCKED_FILE = path.join(ROOT, '_imagens_bloqueadas.json');
-const HASH_FILE    = path.join(ROOT, '_placeholder_hashes.json');
 
 const DRY_RUN = !process.argv.includes('--fix');
 
@@ -58,14 +57,6 @@ function writeJson(filePath, data) {
   fs.renameSync(tmp, filePath);
 }
 
-// Carrega os hashes do arquivo persistente e mescla com os embutidos
-function loadAllPlaceholderHashes() {
-  const stored = readJson(HASH_FILE, { hashes: [] });
-  const all = new Set(KNOWN_PLACEHOLDER_HASHES);
-  for (const h of stored.hashes) all.add(h);
-  return all;
-}
-
 // ─── Lê todos os cartões (.js) de uma operadora ──────────────────────────────
 function readCardFiles(dataDir) {
   const cards = [];
@@ -86,7 +77,7 @@ function readCardFiles(dataDir) {
 
 // ─── Principal ───────────────────────────────────────────────────────────────
 
-const placeholderHashes = loadAllPlaceholderHashes();
+const placeholderHashes = PLACEHOLDER_HASHES;
 console.log(`Hashes de placeholder conhecidos: ${placeholderHashes.size}`);
 
 const blockedRegistry = readJson(BLOCKED_FILE, { atualizado_em: null, total: 0, cartoes: [] });
@@ -186,15 +177,6 @@ if (!DRY_RUN) {
   blockedRegistry.atualizado_em = new Date().toISOString();
   blockedRegistry.total = blockedRegistry.cartoes.length;
   writeJson(BLOCKED_FILE, blockedRegistry);
-
-  // Persiste o hash para o scraper usar
-  const hashData = readJson(HASH_FILE, { hashes: [] });
-  for (const h of placeholderHashes) {
-    if (!hashData.hashes.includes(h)) hashData.hashes.push(h);
-  }
-  hashData.atualizado_em = new Date().toISOString();
-  hashData.total = hashData.hashes.length;
-  writeJson(HASH_FILE, hashData);
 }
 
 console.log('\n=== Resumo ===');
