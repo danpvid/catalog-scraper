@@ -116,3 +116,28 @@ node scraper.js --aguardar-login --refresh
 # Passo 4: reconstruir o catalogo HTML
 node build-catalog.js
 ```
+
+## 9. Identificar cartoes com dados incompletos
+
+Alguns cartoes sao extraidos com campos preenchidos como `"Confirm you are human
+to view details"` — o Colnect exige login para exibir certos detalhes (serie,
+fabricante, tiragem, etc.).
+
+```powershell
+# Lista no terminal os cartoes com campos bloqueados
+node fix-incomplete-cards.js
+
+# Salva o resultado em _cartoes_incompletos.json
+node fix-incomplete-cards.js --json
+```
+
+O arquivo `_cartoes_incompletos.json` contém para cada cartao:
+- `id_colnect`, `nome`, `url_colnect`, `operadora`
+- `campos_bloqueados`: lista dos campos com dados protegidos
+
+Para re-extrair os dados completos, rode o scraper com login e `--refresh`:
+
+```powershell
+node scraper.js --aguardar-login --refresh
+node build-catalog.js
+```

@@ -9,7 +9,9 @@
     "catalog": "node build-catalog.js",
     "fix:blocked": "node fix-blocked-images.js",
     "fix:blocked:apply": "node fix-blocked-images.js --fix",
-    "check": "node --check scraper.js && node --check build-catalog.js && node --check run-continuous.js && node --check fix-blocked-images.js"
+    "fix:incomplete": "node fix-incomplete-cards.js",
+    "fix:incomplete:json": "node fix-incomplete-cards.js --json",
+    "check": "node --check scraper.js && node --check build-catalog.js && node --check run-continuous.js && node --check fix-blocked-images.js && node --check fix-incomplete-cards.js"
   },
   "keywords": [],
   "author": "",
