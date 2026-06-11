@@ -1107,19 +1107,35 @@ async function processIncompleteCards(state) {
         continue;
       }
 
-      // Mescla: mantém dados existentes, sobrescreve com novos (não bloqueados)
+      // Mescla: mantém dados existentes, sobrescreve apenas com valores não bloqueados
       const oldData = existingEntry.data;
+
+      // Mescla propriedades: só substitui se o novo valor não for bloqueado
       const mergedProps = { ...oldData.propriedades };
       for (const [k, v] of Object.entries(props)) {
         if (!isBlockedText(v)) mergedProps[k] = v;
       }
 
+      // Normaliza com as props mescladas para obter campos de topo nível atualizados
       const updatedCard = normalizeCard({
         ...oldData,
         propriedades: mergedProps,
         imagens: images.length > 0 ? images : oldData.imagens,
         imagem_thumb: images[0] || oldData.imagem_thumb,
       });
+
+      // Para campos de topo nível (serie, fabricante, etc.), mantém o valor antigo
+      // se o novo for bloqueado ou se o antigo já tinha valor real
+      const topLevelFields = ['serie', 'numero_catalogo', 'composicao', 'tecnologia',
+        'fabricante', 'descricao', 'pontuacao', 'valor_facial', 'data_emissao',
+        'ano', 'tiragem', 'prazo_validade', 'validade', 'temas', 'pais', 'operadora'];
+      for (const field of topLevelFields) {
+        if (isBlockedText(updatedCard[field])) {
+          // Valor novo é bloqueado: restaura o valor antigo (mesmo que também fosse bloqueado,
+          // é melhor não piorar — o campo já estava assim)
+          updatedCard[field] = oldData[field];
+        }
+      }
 
       // Mantém dados de imagens locais já baixadas
       const finalCard = {
