@@ -30,6 +30,8 @@ const LIST_HTML = args.listHtml || null;
 const HEADLESS = args.headless === 'true';
 // Aguarda o usuário fazer login manual antes de iniciar o scraping
 const AWAIT_LOGIN = !!args.aguardarLogin;
+// Processa apenas cartões com dados incompletos listados em _cartoes_incompletos.json
+const APENAS_INCOMPLETOS = !!args.apenasIncompletos;
 // Sessão global do Playwright (fica aberta durante toda a extração)
 let BROWSER = null;
 let CTX = null;
@@ -551,7 +553,7 @@ function parseCardList(html, listUrl) {
     item.find('dl dt').each((__, dt) => {
       const key = cleanText($(dt).text()).replace(/:$/, '');
       const value = cleanText($(dt).next('dd').text());
-      if (key && value && !/login to see complete item details/i.test(value)) props[key] = value;
+      if (key && value && !/login to see complete item details|confirm you are human/i.test(value)) props[key] = value;
     });
 
     const images = [];
@@ -1025,10 +1027,165 @@ async function processCompany(company, state) {
   return { operadora: company.name, total_listado: cards.length, salvos: saved, ignorados: skipped, erros: errors };
 }
 
+// ─── Extração de página individual de cartão ─────────────────────────────────
+
+function isBlockedText(value) {
+  return typeof value === 'string' && /confirm you are human|login to see complete/i.test(value);
+}
+
+/**
+ * Visita a página individual do cartão e extrai todas as propriedades disponíveis.
+ */
+async function parseCardDetail(cardUrl) {
+  const { body } = await fetchPage(cardUrl);
+  if (isChallengePage(body)) throw new ChallengeError('Anubis detectado na página do cartão.');
+
+  const $ = cheerio.load(body);
+  const props = {};
+
+  // Propriedades em tabela dl/dt/dd (padrão Colnect)
+  $('dl dt').each((_, dt) => {
+    const key = cleanText($(dt).text()).replace(/:$/, '');
+    const value = cleanText($(dt).next('dd').text());
+    if (key && value && !isBlockedText(value)) props[key] = value;
+  });
+
+  // Imagens da página de detalhe
+  const images = [];
+  $('img[src*="i.colnect.net"], img[data-src*="i.colnect.net"]').each((_, img) => {
+    for (const attr of ['data-src', 'data-lazy-src', 'src']) {
+      const raw = $(img).attr(attr);
+      if (!raw || raw.startsWith('data:')) continue;
+      const normalized = normalizeImageUrl(raw);
+      if (normalized && !images.includes(normalized)) images.push(normalized);
+    }
+  });
+
+  return { props, images };
+}
+
+/**
+ * Lê _cartoes_incompletos.json, visita a página de cada cartão e atualiza o .js
+ * com os dados completos. Remove do arquivo os cartões corrigidos com sucesso.
+ */
+async function processIncompleteCards(state) {
+  const incompleteFile = path.join(OUTPUT_DIR, '_cartoes_incompletos.json');
+  if (!fs.existsSync(incompleteFile)) {
+    log('Nenhum arquivo _cartoes_incompletos.json encontrado. Rode fix-incomplete-cards.js --json primeiro.');
+    return;
+  }
+
+  const registry = readJsonFile(incompleteFile, { cartoes: [] });
+  const pending = registry.cartoes.filter(c => c.id_colnect && c.url_colnect);
+  log(`Cartoes incompletos para re-processar: ${pending.length}`);
+
+  let corrigidos = 0;
+  let erros = 0;
+  const aindaIncompletos = [];
+
+  for (const entry of pending) {
+    log(`\n  [${entry.id_colnect}] ${entry.nome}`);
+    log(`  URL: ${entry.url_colnect}`);
+
+    // Localiza o arquivo .js do cartão
+    const dataDir = path.join(DATA_DIR, entry.operadora_dir);
+    const existingCards = readExistingCards(dataDir);
+    const existingEntry = existingCards.get(String(entry.id_colnect));
+
+    if (!existingEntry) {
+      log(`  AVISO: arquivo .js nao encontrado em dados/${entry.operadora_dir}. Pulando.`);
+      aindaIncompletos.push(entry);
+      continue;
+    }
+
+    try {
+      const { props, images } = await parseCardDetail(entry.url_colnect);
+
+      if (Object.keys(props).length === 0) {
+        log(`  Nenhuma propriedade extraida (possivelmente ainda requer login).`);
+        aindaIncompletos.push(entry);
+        continue;
+      }
+
+      // Mescla: mantém dados existentes, sobrescreve com novos (não bloqueados)
+      const oldData = existingEntry.data;
+      const mergedProps = { ...oldData.propriedades };
+      for (const [k, v] of Object.entries(props)) {
+        if (!isBlockedText(v)) mergedProps[k] = v;
+      }
+
+      const updatedCard = normalizeCard({
+        ...oldData,
+        propriedades: mergedProps,
+        imagens: images.length > 0 ? images : oldData.imagens,
+        imagem_thumb: images[0] || oldData.imagem_thumb,
+      });
+
+      // Mantém dados de imagens locais já baixadas
+      const finalCard = {
+        ...updatedCard,
+        imagens_local:           oldData.imagens_local,
+        imagem_principal:        oldData.imagem_principal,
+        imagens_high_local:      oldData.imagens_high_local,
+        imagem_high_principal:   oldData.imagem_high_principal,
+        imagens_variantes_local: oldData.imagens_variantes_local,
+        imagem_bloqueada:        oldData.imagem_bloqueada,
+        operadora_nome:          oldData.operadora_nome,
+        operadora_dir:           oldData.operadora_dir,
+        extraido_em:             new Date().toISOString(),
+      };
+
+      fs.writeFileSync(existingEntry.path, `module.exports = ${JSON.stringify(finalCard, null, 2)};\n`, 'utf8');
+
+      // Verifica se ainda tem campos bloqueados
+      const aindaBloqueados = Object.values(finalCard).filter(isBlockedText).length
+        + Object.values(finalCard.propriedades || {}).filter(isBlockedText).length;
+
+      if (aindaBloqueados > 0) {
+        log(`  Ainda possui ${aindaBloqueados} campo(s) bloqueado(s).`);
+        aindaIncompletos.push(entry);
+      } else {
+        log(`  Corrigido com sucesso.`);
+        corrigidos++;
+      }
+
+      state.companies[entry.operadora] = {
+        ...(state.companies[entry.operadora] || {}),
+        updated_at: new Date().toISOString(),
+      };
+      saveState(state);
+    } catch (error) {
+      log(`  ERRO: ${error.message}`);
+      erros++;
+      aindaIncompletos.push(entry);
+      if (error instanceof ChallengeError) {
+        log('  Anubis persistente. Reiniciando sessao...');
+        await initSession();
+      }
+    }
+  }
+
+  // Atualiza o arquivo: mantém apenas os que ainda estão incompletos
+  const updated = {
+    gerado_em: registry.gerado_em,
+    atualizado_em: new Date().toISOString(),
+    total: aindaIncompletos.length,
+    cartoes: aindaIncompletos,
+  };
+  writeJsonFile(incompleteFile, updated);
+
+  log(`\n=== Resumo re-extracao ===`);
+  log(`Corrigidos : ${corrigidos}`);
+  log(`Ainda incompletos: ${aindaIncompletos.length}`);
+  log(`Erros: ${erros}`);
+  log(`_cartoes_incompletos.json atualizado (${aindaIncompletos.length} restantes).`);
+}
+
 async function main() {
   ensureDir(DATA_DIR);
   ensureDir(IMAGES_DIR);
 
+  log('Scraper Colnect - cartoes telefonicos do Brasil');
   log(`Saida: ${OUTPUT_DIR}`);
   log(`Imagens: ${DOWNLOAD_IMAGES ? 'sim' : 'nao'}`);
   log(`Imagens high: ${DOWNLOAD_HIGH_IMAGES ? 'sim' : 'nao'}`);
@@ -1040,6 +1197,14 @@ async function main() {
   saveState(state);
 
   await initSession();
+
+  // Modo especial: re-extrai apenas cartões com dados incompletos
+  if (APENAS_INCOMPLETOS) {
+    log('Modo: --apenas-incompletos (re-extraindo dados de cartoes incompletos)');
+    await processIncompleteCards(state);
+    if (BROWSER) { try { await BROWSER.close(); } catch {} BROWSER = null; }
+    return;
+  }
 
   let companies = await getCompanies();
   if (FILTER_OPERADORA) {

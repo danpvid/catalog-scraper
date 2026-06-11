@@ -64,6 +64,7 @@ Use `--refresh-links` quando quiser redescobrir as listas de uma operadora.
 - `--refresh`: reprocessa dados e imagens existentes.
 - `--refresh-links`: baixa novamente as paginas de listagem.
 - `--aguardar-login`: pausa apos abrir o browser para voce fazer login manual no Colnect antes de comecar o scraping. Necessario para baixar imagens protegidas.
+- `--apenas-incompletos`: re-extrai somente os cartoes listados em `_cartoes_incompletos.json`, visitando a pagina individual de cada um. Use junto com `--aguardar-login`.
 
 ## 6. Corrigir imagens bloqueadas ja baixadas
 
@@ -135,9 +136,20 @@ O arquivo `_cartoes_incompletos.json` contém para cada cartao:
 - `id_colnect`, `nome`, `url_colnect`, `operadora`
 - `campos_bloqueados`: lista dos campos com dados protegidos
 
-Para re-extrair os dados completos, rode o scraper com login e `--refresh`:
+Para re-extrair os dados completos, rode o scraper com login:
 
 ```powershell
-node scraper.js --aguardar-login --refresh
+# Passo 1: gerar a lista de cartoes incompletos
+node fix-incomplete-cards.js --json
+
+# Passo 2: re-extrair apenas esses cartoes (visita a pagina individual de cada um)
+#   O browser abre visivelmente. Faca login no Colnect e pressione ENTER.
+node scraper.js --aguardar-login --apenas-incompletos
+
+# Passo 3: reconstruir o catalogo HTML
 node build-catalog.js
 ```
+
+O scraper visita a página individual de cada cartão incompleto, extrai os dados
+completos e atualiza o `.js` sem re-baixar as imagens já existentes.
+Ao final, `_cartoes_incompletos.json` é atualizado removendo os que foram corrigidos.
