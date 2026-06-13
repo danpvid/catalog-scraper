@@ -1153,12 +1153,18 @@ async function processIncompleteCards(state) {
 
       fs.writeFileSync(existingEntry.path, `module.exports = ${JSON.stringify(finalCard, null, 2)};\n`, 'utf8');
 
-      // Verifica se ainda tem campos bloqueados
-      const aindaBloqueados = Object.values(finalCard).filter(isBlockedText).length
-        + Object.values(finalCard.propriedades || {}).filter(isBlockedText).length;
+      // Coleta campos ainda bloqueados após o merge
+      const camposBloqueados = [];
+      for (const [k, v] of Object.entries(finalCard)) {
+        if (k === 'propriedades') continue;
+        if (isBlockedText(v)) camposBloqueados.push(k);
+      }
+      for (const [k, v] of Object.entries(finalCard.propriedades || {})) {
+        if (isBlockedText(v)) camposBloqueados.push(`propriedades.${k}`);
+      }
 
-      if (aindaBloqueados > 0) {
-        log(`  Ainda possui ${aindaBloqueados} campo(s) bloqueado(s).`);
+      if (camposBloqueados.length > 0) {
+        log(`  Ainda bloqueados (${camposBloqueados.length}): ${camposBloqueados.join(', ')}`);
         aindaIncompletos.push(entry);
       } else {
         log(`  Corrigido com sucesso.`);
