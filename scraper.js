@@ -487,18 +487,20 @@ async function initSession() {
     });
     log('  Login confirmado.');
 
-    // Recarrega a página principal após login
-    await PAGE.goto(COMPANIES_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    // Navega para a página de listagem de uma operadora para acionar a verificação humana
+    const SAMPLE_LIST_URL = 'https://colnect.com/pt/phonecards/list/country/30-Brasil/company/7208-Brasil_Telecom_GO_24_Goi%C3%A1s_Telegoias';
+    log(`  Abrindo pagina de listagem para verificacao humana...`);
+    await PAGE.goto(SAMPLE_LIST_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
     await humanScroll(PAGE);
     await humanPause();
 
     log('');
     log('========================================================');
     log('  PASSO 2/2 - VERIFICACAO HUMANA');
-    log('  Se aparecer o desafio "Confirme que voce e humano"');
-    log('  ou "Iniciar Sessao" em alguma pagina, resolva-o');
-    log('  manualmente no browser.');
-    log('  Quando a pagina carregar normalmente,');
+    log('  O browser abriu uma pagina de listagem de cartoes.');
+    log('  Se aparecer desafio "Confirme que voce e humano"');
+    log('  ou campo "Iniciar Sessao", resolva-o no browser.');
+    log('  Quando os cartoes carregarem normalmente,');
     log('  pressione ENTER para iniciar o scraping.');
     log('========================================================');
     await new Promise(resolve => {
@@ -508,6 +510,10 @@ async function initSession() {
     });
     log('  Verificacao confirmada. Iniciando scraping...');
 
+    // Volta para a página principal para capturar o HTML de operadoras autenticado
+    await PAGE.goto(COMPANIES_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await humanScroll(PAGE);
+    await humanPause();
     COMPANIES_HTML_CONTENT = await PAGE.content();
   }
 }
