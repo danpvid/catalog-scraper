@@ -19,11 +19,16 @@ const ROOT           = __dirname;
 const DATA_DIR       = path.join(ROOT, 'dados');
 const OUTPUT_FILE    = path.join(ROOT, '_cartoes_incompletos.json');
 
-const BLOCKED_TEXT   = 'confirm you are human to view details';
+const BLOCKED_TEXTS  = [
+  'confirm you are human to view details',
+  'login to see complete item details',
+];
 const SAVE_JSON      = process.argv.includes('--json');
 
 function isBlocked(value) {
-  return typeof value === 'string' && value.toLowerCase().includes(BLOCKED_TEXT);
+  if (typeof value !== 'string') return false;
+  const lower = value.toLowerCase();
+  return BLOCKED_TEXTS.some(t => lower.includes(t));
 }
 
 function findBlockedFields(card) {
