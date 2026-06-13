@@ -476,7 +476,7 @@ async function initSession() {
   if (AWAIT_LOGIN) {
     log('');
     log('========================================================');
-    log('  AGUARDANDO LOGIN MANUAL');
+    log('  PASSO 1/2 - LOGIN');
     log('  Faca login no Colnect no browser aberto.');
     log('  Depois volte aqui e pressione ENTER para continuar.');
     log('========================================================');
@@ -485,11 +485,29 @@ async function initSession() {
       process.stdin.resume();
       process.stdin.once('data', () => { process.stdin.pause(); resolve(); });
     });
-    log('  Login confirmado. Retomando scraping...');
-    // Recarrega a página principal após login para capturar HTML autenticado
+    log('  Login confirmado.');
+
+    // Recarrega a página principal após login
     await PAGE.goto(COMPANIES_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
     await humanScroll(PAGE);
     await humanPause();
+
+    log('');
+    log('========================================================');
+    log('  PASSO 2/2 - VERIFICACAO HUMANA');
+    log('  Se aparecer o desafio "Confirme que voce e humano"');
+    log('  ou "Iniciar Sessao" em alguma pagina, resolva-o');
+    log('  manualmente no browser.');
+    log('  Quando a pagina carregar normalmente,');
+    log('  pressione ENTER para iniciar o scraping.');
+    log('========================================================');
+    await new Promise(resolve => {
+      process.stdin.setRawMode(false);
+      process.stdin.resume();
+      process.stdin.once('data', () => { process.stdin.pause(); resolve(); });
+    });
+    log('  Verificacao confirmada. Iniciando scraping...');
+
     COMPANIES_HTML_CONTENT = await PAGE.content();
   }
 }
